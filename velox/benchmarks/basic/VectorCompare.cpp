@@ -42,6 +42,8 @@ class VectorCompareBenchmark : public functions::test::FunctionBenchmarkBase {
 
     flatVector_ = fuzzer.fuzzFlat(BIGINT());
 
+    strVector_ = fuzzer.fuzzFlat(VARCHAR());
+
     arrayVector_ = fuzzer.fuzzFlat(ARRAY(BIGINT()));
 
     mapVector_ = fuzzer.fuzzFlat(MAP(BIGINT(), BIGINT()));
@@ -61,9 +63,9 @@ class VectorCompareBenchmark : public functions::test::FunctionBenchmarkBase {
 
   // Avoid dynamic dispatch by casting the vector before calling compare to its
   // derived that have final compare function.
-  size_t runFastFlat() {
+  template <typename Flat>
+  size_t runFastFlat(const Flat* flatVector) {
     size_t sum = 0;
-    auto flatVector = flatVector_->as<FlatVector<int64_t>>();
     for (auto i = 0; i < vectorSize_; i++) {
       sum += *flatVector->compare(flatVector, i, vectorSize_ - i - 1, kFlags);
     }
@@ -71,7 +73,21 @@ class VectorCompareBenchmark : public functions::test::FunctionBenchmarkBase {
     return vectorSize_;
   }
 
+  size_t runSortIndices(const VectorPtr& vector) {
+    std::vector<vector_size_t> indices;
+    indices.resize(vectorSize_);
+    vector->sortIndices(indices, kFlags);
+
+    int64_t sum{0};
+    for (vector_size_t i : indices) {
+      sum += i;
+    }
+    folly::doNotOptimizeAway(sum);
+    return vectorSize_;
+  }
+
   VectorPtr flatVector_;
+  VectorPtr strVector_;
   VectorPtr arrayVector_;
   VectorPtr mapVector_;
   VectorPtr rowVector_;
@@ -90,7 +106,23 @@ BENCHMARK(compareSimilarSimpleFlat) {
 }
 
 BENCHMARK(compareSimilarSimpleFlatNoDispatch) {
-  benchmark->runFastFlat();
+  benchmark->runFastFlat(benchmark->flatVector_->as<FlatVector<int64_t>>());
+}
+
+BENCHMARK(sortIndicesSimple) {
+  benchmark->runSortIndices(benchmark->flatVector_);
+}
+
+BENCHMARK(compareSimilarSimpleStr) {
+  benchmark->run(benchmark->strVector_);
+}
+
+BENCHMARK(compareSimilarSimpleStrNoDispatch) {
+  benchmark->runFastFlat(benchmark->strVector_->as<FlatVector<StringView>>());
+}
+
+BENCHMARK(sortIndicesStr) {
+  benchmark->runSortIndices(benchmark->strVector_);
 }
 
 BENCHMARK(compareSimilarArray) {

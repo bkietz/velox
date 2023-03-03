@@ -36,6 +36,13 @@ Range<bool> FlatVector<bool>::asRange() const {
   return Range<bool>(rawValues<int64_t>(), 0, BaseVector::length_);
 }
 
+#ifdef VELOX_ENABLE_INDICES_OFFSETS
+template <>
+const StringView* FlatVector<StringView>::rawValues() const {
+  VELOX_UNSUPPORTED("rawValues() for StringView is not supported");
+}
+#endif // VELOX_ENABLE_INDICES_OFFSETS
+
 template <>
 void FlatVector<bool>::set(vector_size_t idx, bool value) {
   VELOX_DCHECK(idx < BaseVector::length_);
@@ -263,7 +270,14 @@ void FlatVector<StringView>::set(vector_size_t idx, StringView value) {
     char* ptr = buffer->asMutable<char>() + buffer->size();
     buffer->setSize(buffer->size() + value.size());
     memcpy(ptr, value.data(), value.size());
+#ifdef VELOX_ENABLE_INDICES_OFFSETS
+    auto storage = *reinterpret_cast<StringViewStorage*>(&value);
+    storage.not_inlined.buffer_index = stringBuffers_.size() - 1;
+    storage.not_inlined.offset = ptr - buffer->as<char>();
+    rawValues_[idx] = *reinterpret_cast<StringView*>(&storage);
+#else // VELOX_ENABLE_INDICES_OFFSETS
     rawValues_[idx] = StringView(ptr, value.size());
+#endif // VELOX_ENABLE_INDICES_OFFSETS
   }
 }
 
@@ -389,21 +403,26 @@ void FlatVector<StringView>::copyRanges(
     const BaseVector* source,
     const folly::Range<const CopyRange*>& ranges) {
   auto leaf = source->wrappedVector()->asUnchecked<SimpleVector<StringView>>();
+#ifdef VELOX_ENABLE_INDICES_OFFSETS
+  // TODO(bkietz) rewriting this to swizzle views which reference newly added
+  // buffers will be tricky, for now I'm just disabling this optimization
+#else // VELOX_ENABLE_INDICES_OFFSETS
   if (pool_ == leaf->pool()) {
     // We copy referencing the storage of 'source'.
     for (auto& r : ranges) {
       copyValuesAndNulls(source, r.targetIndex, r.sourceIndex, r.count);
     }
     acquireSharedStringBuffers(source);
-  } else {
-    for (auto& r : ranges) {
-      for (auto i = 0; i < r.count; ++i) {
-        if (source->isNullAt(r.sourceIndex + i)) {
-          setNull(r.targetIndex + i, true);
-        } else {
-          set(r.targetIndex + i,
-              leaf->valueAt(source->wrappedIndex(r.sourceIndex + i)));
-        }
+    return;
+  }
+#endif // VELOX_ENABLE_INDICES_OFFSETS
+  for (auto& r : ranges) {
+    for (auto i = 0; i < r.count; ++i) {
+      if (source->isNullAt(r.sourceIndex + i)) {
+        setNull(r.targetIndex + i, true);
+      } else {
+        set(r.targetIndex + i,
+            leaf->valueAt(source->wrappedIndex(r.sourceIndex + i)));
       }
     }
   }

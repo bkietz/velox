@@ -64,9 +64,7 @@ void DictionaryVector<T>::setInternalState() {
     scalarDictionaryValues_ =
         reinterpret_cast<SimpleVector<T>*>(dictionaryValues_->loadedVector());
     if (scalarDictionaryValues_->isFlatEncoding() && !std::is_same_v<T, bool>) {
-      rawDictionaryValues_ =
-          reinterpret_cast<FlatVector<T>*>(scalarDictionaryValues_)
-              ->rawValues();
+      flatVector_ = reinterpret_cast<FlatVector<T>*>(scalarDictionaryValues_);
     }
   }
   initialized_ = true;
@@ -127,8 +125,8 @@ bool DictionaryVector<T>::isNullAt(vector_size_t idx) const {
 template <typename T>
 const T DictionaryVector<T>::valueAtFast(vector_size_t idx) const {
   VELOX_DCHECK(initialized_);
-  if (rawDictionaryValues_) {
-    return rawDictionaryValues_[getDictionaryIndex(idx)];
+  if (flatVector_) {
+    return flatVector_->valueAtFast(getDictionaryIndex(idx));
   }
   return scalarDictionaryValues_->valueAt(getDictionaryIndex(idx));
 }

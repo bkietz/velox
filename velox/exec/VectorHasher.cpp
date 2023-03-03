@@ -183,6 +183,7 @@ template <typename T>
 bool VectorHasher::makeValueIdsFlatNoNulls(
     const SelectivityVector& rows,
     uint64_t* result) {
+  // TODO(bkietz) this will need to be replaced by calls to valueAt()
   const auto* values = decoded_.data<T>();
   if (isRange_ && tryMapToRange(values, rows, result)) {
     return true;

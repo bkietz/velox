@@ -28,6 +28,9 @@
 
 namespace facebook::velox {
 
+template <typename T>
+class FlatVector;
+
 // Variable length string or binary type for use in vectors. This has
 // semantics similar to std::string_view or folly::StringPiece and
 // exposes a subset of the interface. If the string is 12 characters
@@ -242,6 +245,8 @@ struct StringView {
     char inlined[8];
     const char* data;
   } value_;
+
+  friend class FlatVector<StringView>;
 };
 
 // This creates a user-defined literal for StringView. You can use it as:
@@ -251,6 +256,28 @@ struct StringView {
 inline StringView operator"" _sv(const char* str, size_t len) {
   return StringView(str, len);
 }
+
+#ifdef VELOX_ENABLE_INDICES_OFFSETS
+struct StringViewStorage {
+  static constexpr uint64_t kBufferIndexBits = 16;
+
+  union {
+    struct {
+      uint32_t length;
+      char chars[12];
+    } inlined = {0, {0}};
+
+    struct {
+      uint32_t length;
+      char prefix[4];
+      // index into stringBuffers_
+      uint64_t buffer_index : kBufferIndexBits;
+      // offset within buffer_index’th buffer
+      uint64_t offset : 64 - kBufferIndexBits;
+    } not_inlined;
+  };
+};
+#endif // VELOX_ENABLE_INDICES_OFFSETS
 
 } // namespace facebook::velox
 

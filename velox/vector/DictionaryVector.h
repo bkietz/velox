@@ -209,9 +209,8 @@ class DictionaryVector : public SimpleVector<T> {
   VectorPtr dictionaryValues_;
   // Caches 'dictionaryValues_.get()' if scalar type.
   SimpleVector<T>* scalarDictionaryValues_ = nullptr;
-  // Caches 'scalarDictionaryValues_->getRawValues()' if 'dictionaryValues_'
-  // is a FlatVector<T>.
-  const T* rawDictionaryValues_ = nullptr;
+  // Caches 'scalarDictionaryValues_.get()' if a FlatVector<T>.
+  const FlatVector<T>* flatVector_ = nullptr;
 
   // Indicates whether internal state has been set. Can also be false if there
   // is an unloaded lazy vector under the encoding layers.

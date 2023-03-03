@@ -277,29 +277,20 @@ class FlatVector final : public SimpleVector<T> {
 
   void sortIndices(std::vector<vector_size_t>& indices, CompareFlags flags)
       const override {
-    auto compareNonNull = [&](vector_size_t left, vector_size_t right) {
-      auto leftValue = valueAtFast(left);
-      auto rightValue = valueAtFast(right);
-      auto result = SimpleVector<T>::comparePrimitiveAsc(leftValue, rightValue);
-      return (flags.ascending ? result : result * -1) < 0;
-    };
-
     if (BaseVector::rawNulls_) {
       std::sort(
           indices.begin(),
           indices.end(),
           [&](vector_size_t left, vector_size_t right) {
-            bool leftNull = BaseVector::isNullAt(left);
-            bool rightNull = BaseVector::isNullAt(right);
-            if (leftNull || rightNull) {
-              return BaseVector::compareNulls(leftNull, rightNull, flags)
-                         .value() < 0;
-            }
-
-            return compareNonNull(left, right);
+            return compareFlat<true>(this, left, right, flags).value() < 0;
           });
     } else {
-      std::sort(indices.begin(), indices.end(), compareNonNull);
+      std::sort(
+          indices.begin(),
+          indices.end(),
+          [&](vector_size_t left, vector_size_t right) {
+            return compareFlat<false>(this, left, right, flags).value() < 0;
+          });
     }
   }
 
@@ -457,6 +448,82 @@ const bool* FlatVector<bool>::rawValues() const;
 
 template <>
 Range<bool> FlatVector<bool>::asRange() const;
+
+namespace internal {
+FOLLY_ALWAYS_INLINE const char* getNonInlineStringData(
+    const StringView& view,
+    const std::vector<BufferPtr>& stringBuffers) {
+  const auto& storage = reinterpret_cast<const StringViewStorage&>(view);
+  const auto& buffer = stringBuffers[storage.not_inlined.buffer_index];
+  return buffer->as<char>() + storage.not_inlined.offset;
+}
+} // namespace internal
+
+#ifdef VELOX_ENABLE_INDICES_OFFSETS
+template <>
+FOLLY_ALWAYS_INLINE const StringView
+FlatVector<StringView>::valueAtFast(vector_size_t idx) const {
+  const auto& view = rawValues_[idx];
+  if (view.isInline())
+    return view;
+
+  return {internal::getNonInlineStringData(view, stringBuffers_), view.size()};
+}
+
+// This must be specialized for performance, otherwise (if we go through
+// valueAt) the branch on vector size happens first which obviates the
+// neat prefixAsInt comparison fast path.
+template <>
+template <bool compareNulls>
+FOLLY_ALWAYS_INLINE std::optional<int32_t> FlatVector<StringView>::compareFlat(
+    const FlatVector<StringView>* other,
+    vector_size_t index,
+    vector_size_t otherIndex,
+    CompareFlags flags) const {
+  if constexpr (compareNulls) {
+    bool otherNull = other->isNullAt(otherIndex);
+    bool isNull = BaseVector::isNullAt(index);
+    if (isNull || otherNull) {
+      return BaseVector::compareNulls(isNull, otherNull, flags);
+    }
+  }
+
+  const auto& thisView = rawValues_[index];
+  const auto& otherView = other->rawValues_[otherIndex];
+
+  if (thisView.prefixAsInt() != otherView.prefixAsInt()) {
+    // The result is decided on prefix. The shorter will be less
+    // because the prefix is padded with zeros.
+    return memcmp(thisView.prefix_, otherView.prefix_, StringView::kPrefixSize);
+  }
+
+  int32_t size =
+      std::min(thisView.size_, otherView.size_) - StringView::kPrefixSize;
+  if (size <= 0) {
+    // One ends within the prefix.
+    return thisView.size_ - otherView.size_;
+  }
+  if (size <= StringView::kInlineSize && thisView.isInline() &&
+      otherView.isInline()) {
+    int32_t result =
+        memcmp(thisView.value_.inlined, otherView.value_.inlined, size);
+    return (result != 0) ? result : thisView.size_ - otherView.size_;
+  }
+
+  int result = memcmp(
+      internal::getNonInlineStringData(thisView, stringBuffers_) +
+          StringView::kPrefixSize,
+      internal::getNonInlineStringData(otherView, stringBuffers_) +
+          StringView::kPrefixSize,
+      size);
+
+  result = (result != 0) ? result : thisView.size_ - otherView.size_;
+  return flags.ascending ? result : result * -1;
+}
+
+template <>
+const StringView* FlatVector<StringView>::rawValues() const;
+#endif // VELOX_ENABLE_INDICES_OFFSETS
 
 template <>
 void FlatVector<StringView>::set(vector_size_t idx, StringView value);
